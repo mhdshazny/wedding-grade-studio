@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
@@ -133,6 +135,12 @@ class _PreviewArea extends StatelessWidget {
   final AppState state;
   const _PreviewArea({required this.state});
 
+  ui.Image? _stageImage(PhotoItem item) => switch (state.stage) {
+        ViewStage.original => item.beforeImage,
+        ViewStage.flattened => item.flatImage,
+        ViewStage.graded => item.afterImage,
+      };
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -159,11 +167,16 @@ class _PreviewArea extends StatelessWidget {
           ),
         ),
       );
-    } else if (item.beforeImage != null && item.afterImage != null) {
+    } else if (item.beforeImage != null && _stageImage(item) != null) {
       child = BeforeAfterViewer(
         key: ValueKey(item.id),
         before: item.beforeImage!,
-        after: item.afterImage!,
+        after: _stageImage(item)!,
+        afterLabel: switch (state.stage) {
+          ViewStage.original => 'Original',
+          ViewStage.flattened => 'Flat Profile',
+          ViewStage.graded => 'After',
+        },
       );
     } else {
       final label = switch (item.status) {

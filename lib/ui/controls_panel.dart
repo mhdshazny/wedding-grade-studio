@@ -16,6 +16,44 @@ class ControlsPanel extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
+        Text('Pipeline', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 10),
+        _StageButton(
+          step: '1',
+          label: 'Flatten Profile',
+          icon: Icons.tonality,
+          active: state.stage == ViewStage.flattened,
+          enabled: state.selected != null,
+          onPressed: () => state.setStage(state.stage == ViewStage.flattened
+              ? ViewStage.original
+              : ViewStage.flattened),
+        ),
+        const SizedBox(height: 8),
+        _StageButton(
+          step: '2',
+          label: 'Apply Wedding Palette',
+          icon: Icons.palette_outlined,
+          active: state.stage == ViewStage.graded,
+          enabled: state.selected != null,
+          onPressed: () => state.setStage(state.stage == ViewStage.graded
+              ? ViewStage.original
+              : ViewStage.graded),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          switch (state.stage) {
+            ViewStage.original =>
+              'Showing the untouched photo. Tap a step to preview it.',
+            ViewStage.flattened =>
+              'Neutral LOG-like base — contrast and color normalized.',
+            ViewStage.graded =>
+              'Full wedding grade applied. Fine-tune with the sliders below.',
+          },
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 16),
+        const Divider(),
+        const SizedBox(height: 8),
         Row(
           children: [
             Text('Adjustments',
@@ -177,6 +215,53 @@ class ControlsPanel extends StatelessWidget {
   static String _signed(double v) {
     final n = (v * 100).round();
     return n > 0 ? '+$n' : '$n';
+  }
+}
+
+class _StageButton extends StatelessWidget {
+  final String step;
+  final String label;
+  final IconData icon;
+  final bool active;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  const _StageButton({
+    required this.step,
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final child = Row(
+      children: [
+        Icon(icon, size: 18),
+        const SizedBox(width: 10),
+        Expanded(child: Text('$step · $label')),
+        if (active) const Icon(Icons.check, size: 18),
+      ],
+    );
+    return active
+        ? FilledButton(
+            onPressed: enabled ? onPressed : null,
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+            child: child,
+          )
+        : OutlinedButton(
+            onPressed: enabled ? onPressed : null,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              foregroundColor: scheme.onSurface,
+            ),
+            child: child,
+          );
   }
 }
 

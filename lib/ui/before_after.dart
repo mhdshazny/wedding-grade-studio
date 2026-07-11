@@ -8,11 +8,13 @@ import 'package:flutter/material.dart';
 class BeforeAfterViewer extends StatefulWidget {
   final ui.Image before;
   final ui.Image after;
+  final String afterLabel;
 
   const BeforeAfterViewer({
     super.key,
     required this.before,
     required this.after,
+    this.afterLabel = 'After',
   });
 
   @override
@@ -111,7 +113,10 @@ class _BeforeAfterViewerState extends State<BeforeAfterViewer> {
                 ),
               ),
               Positioned(left: 12, top: 12, child: _label(context, 'Before')),
-              Positioned(right: 12, top: 12, child: _label(context, 'After')),
+              Positioned(
+                  right: 12,
+                  top: 12,
+                  child: _label(context, widget.afterLabel)),
             ],
           ),
         );

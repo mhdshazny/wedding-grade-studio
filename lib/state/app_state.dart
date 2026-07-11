@@ -11,6 +11,9 @@ import '../services/browser_io.dart';
 
 enum PhotoStatus { queued, decoding, analyzing, grading, ready, error }
 
+/// Which pipeline stage the preview's "after" side shows.
+enum ViewStage { original, flattened, graded }
+
 const int _previewMaxEdge = 1400;
 const int _thumbMaxEdge = 240;
 // Full preview working sets are heavy; keep only a few photos "hot".
@@ -45,7 +48,8 @@ class PhotoItem {
   int previewW = 0, previewH = 0;
   SceneCache? cache;
   ui.Image? beforeImage;
-  ui.Image? afterImage;
+  ui.Image? flatImage; // Step 2 result: neutral LOG-like base
+  ui.Image? afterImage; // full wedding grade
   int renderedRevision = -1;
 
   PhotoItem(this.id, this.name, this.bytes);
@@ -54,8 +58,10 @@ class PhotoItem {
 
   void disposeWorkingSet() {
     _disposeImageLater(beforeImage);
+    _disposeImageLater(flatImage);
     _disposeImageLater(afterImage);
     beforeImage = null;
+    flatImage = null;
     afterImage = null;
     previewRgba = null;
     cache = null;
@@ -67,6 +73,7 @@ class AppState extends ChangeNotifier {
   final photos = <PhotoItem>[];
   PhotoItem? selected;
   GradeSettings settings = GradeSettings.defaults;
+  ViewStage stage = ViewStage.original;
   int _settingsRevision = 0;
 
   bool dragging = false;
@@ -193,6 +200,8 @@ class AppState extends ChangeNotifier {
             notifyListeners();
           },
         );
+        item.flatImage =
+            await _rgbaToImage(item.cache!.flat, raw.width, raw.height);
         _markPrepared(item);
       } catch (e) {
         item.status = PhotoStatus.error;
@@ -264,6 +273,26 @@ class AppState extends ChangeNotifier {
   }
 
   // ------------------------------------------------------------------
+  // Pipeline stage (Original → Flatten → Wedding palette)
+  // ------------------------------------------------------------------
+  Future<void> setStage(ViewStage next) async {
+    stage = next;
+    notifyListeners();
+    final item = selected;
+    if (item == null || item.status == PhotoStatus.error) return;
+    // Make sure the image backing the requested stage exists.
+    if (next == ViewStage.flattened && item.cache == null) {
+      await _preparePhoto(item);
+    } else if (next == ViewStage.graded) {
+      if (item.cache == null) {
+        await _preparePhoto(item);
+      } else if (item.renderedRevision != _settingsRevision) {
+        await _renderPreview(item);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Settings
   // ------------------------------------------------------------------
   void updateSettings(GradeSettings next) {
@@ -273,7 +302,11 @@ class AppState extends ChangeNotifier {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 140), () {
       final item = selected;
-      if (item != null && item.status != PhotoStatus.grading) {
+      // Only re-render live when the graded stage is on screen; other
+      // stages pick up the new settings when the palette is applied.
+      if (item != null &&
+          stage == ViewStage.graded &&
+          item.status != PhotoStatus.grading) {
         _renderPreview(item);
       }
     });
