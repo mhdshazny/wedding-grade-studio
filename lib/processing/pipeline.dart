@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../models/preset.dart';
 import '../models/settings.dart';
 import 'blur.dart';
 import 'scene.dart';
@@ -29,64 +30,29 @@ class SceneCache {
   });
 }
 
-/// Resolved, scene-biased grading parameters.
+/// Fully resolved grading parameters: preset + user sliders + scene bias.
 class _Params {
-  double exposure = 0; // EV
-  double warm = 0.35; // total warm bias driving WB multipliers
+  double exposure = 0;
+  double temp = 0;
+  double tint = 0;
   double contrast = 0;
   double highlights = 0;
   double shadows = 0;
-  double greens = 0.5;
-  double blues = 0.5;
-  double clarity = 0.20;
-  double satGlobal = 0.94;
-  double skinProtect = 0.80;
+  double whites = 0;
+  double blackLift = 0;
+  double satGlobal = 1;
+  double vibrance = 0;
+  double clarity = 0;
+  double skinProtect = 0;
   double bloomBase = 0;
-}
-
-_Params _resolve(GradeSettings s, SceneType scene) {
-  final p = _Params()
-    ..warm = 0.35 + s.warmth
-    ..contrast = s.contrast
-    ..highlights = s.highlights
-    ..shadows = s.shadows
-    ..greens = s.greens
-    ..blues = s.blues;
-
-  switch (scene) {
-    case SceneType.indoor:
-      p.warm += 0.05;
-      p.exposure += 0.05;
-    case SceneType.outdoor:
-      break;
-    case SceneType.goldenHour:
-      p.warm -= 0.06; // already warm light — don't stack warmth
-      p.highlights -= 0.10;
-      p.bloomBase += 0.06;
-    case SceneType.shade:
-      p.warm += 0.12;
-      p.blues = math.min(1, p.blues + 0.10);
-    case SceneType.directSunlight:
-      p.highlights -= 0.22;
-      p.shadows += 0.12;
-      p.contrast -= 0.08;
-      p.clarity -= 0.04;
-    case SceneType.reception:
-      p.exposure += 0.14;
-      p.shadows += 0.14;
-      p.clarity -= 0.05;
-    case SceneType.night:
-      p.exposure += 0.10;
-      p.shadows += 0.10;
-      p.clarity -= 0.06;
-      p.satGlobal -= 0.04;
-    case SceneType.flash:
-      p.highlights -= 0.26;
-      p.contrast -= 0.10;
-      p.warm += 0.04;
-      p.skinProtect = math.min(1, p.skinProtect + 0.10);
-  }
-  return p;
+  double ghR = 0, ghG = 0, ghB = 0; // highlight tint
+  double gmR = 0, gmG = 0, gmB = 0; // midtone tint
+  double gsR = 0, gsG = 0, gsB = 0; // shadow tint
+  // Per-hue-degree HSL mixer LUTs (index 0..359).
+  Float32List hueShiftLut = Float32List(360);
+  Float32List satMulLut = Float32List(360);
+  Float32List lumMulLut = Float32List(360);
+  bool hasHsl = false;
 }
 
 double _smoothstep(double e0, double e1, double x) {
@@ -94,8 +60,119 @@ double _smoothstep(double e0, double e1, double x) {
   return t * t * (3 - 2 * t);
 }
 
-/// The wedding tone curve: exposure, shadow/highlight shaping, a soft S,
-/// and a creamy shoulder that never clips.
+/// Hue window with soft raised edges; handles the 360° wrap.
+double _hueWindow(double h, double lo, double hi, double feather) {
+  double w = 0;
+  for (final hh in [h - 360, h, h + 360]) {
+    final rise = _smoothstep(lo - feather, lo + feather, hh);
+    final fall = 1 - _smoothstep(hi - feather, hi + feather, hh);
+    final v = rise * fall;
+    if (v > w) w = v;
+  }
+  return w;
+}
+
+class _BandRange {
+  final HslBand band;
+  final double lo, hi;
+  final double scale;
+  const _BandRange(this.band, this.lo, this.hi, this.scale);
+}
+
+_Params _resolve(GradePreset preset, GradeSettings s, SceneType scene) {
+  final p = _Params()
+    ..exposure = preset.exposure
+    ..temp = preset.temp + s.warmth
+    ..tint = preset.tint
+    ..contrast = preset.contrast + s.contrast
+    ..highlights = preset.highlights + s.highlights
+    ..shadows = preset.shadows + s.shadows
+    ..whites = preset.whites
+    ..blackLift = preset.blackLift
+    ..satGlobal = preset.saturation
+    ..vibrance = preset.vibrance
+    ..clarity = preset.clarity
+    ..skinProtect = preset.skinProtect
+    ..bloomBase = preset.bloomBase
+    ..ghR = preset.highlightTint.r
+    ..ghG = preset.highlightTint.g
+    ..ghB = preset.highlightTint.b
+    ..gmR = preset.midtoneTint.r
+    ..gmG = preset.midtoneTint.g
+    ..gmB = preset.midtoneTint.b
+    ..gsR = preset.shadowTint.r
+    ..gsG = preset.shadowTint.g
+    ..gsB = preset.shadowTint.b;
+
+  // Scene bias keeps the same look consistent across lighting conditions.
+  if (preset.sceneAdaptive) {
+    switch (scene) {
+      case SceneType.indoor:
+        p.temp += 0.05;
+        p.exposure += 0.05;
+      case SceneType.outdoor:
+        break;
+      case SceneType.goldenHour:
+        p.temp -= 0.06; // already warm light — don't stack warmth
+        p.highlights -= 0.10;
+        p.bloomBase += 0.06;
+      case SceneType.shade:
+        p.temp += 0.12;
+      case SceneType.directSunlight:
+        p.highlights -= 0.20;
+        p.shadows += 0.12;
+        p.contrast -= 0.15;
+        p.clarity -= 0.04;
+      case SceneType.reception:
+        p.exposure += 0.12;
+        p.shadows += 0.14;
+        p.clarity -= 0.05;
+      case SceneType.night:
+        p.exposure += 0.10;
+        p.shadows += 0.10;
+        p.clarity -= 0.06;
+        p.satGlobal -= 0.04;
+      case SceneType.flash:
+        p.highlights -= 0.24;
+        p.contrast -= 0.18;
+        p.temp += 0.04;
+        p.skinProtect = math.min(1, p.skinProtect + 0.10);
+    }
+  }
+
+  // Build the per-degree HSL mixer LUTs. The Greens/Blues sliders scale
+  // their band's strength (0.5 = as designed, 0 = off, 1 = double).
+  final bands = <_BandRange>[
+    _BandRange(preset.reds, -20, 20, 1), // wraps around 0
+    _BandRange(preset.oranges, 20, 45, 1),
+    _BandRange(preset.yellows, 45, 75, 1),
+    _BandRange(preset.greens, 75, 165, s.greens * 2),
+    _BandRange(preset.aquas, 165, 200, 1),
+    _BandRange(preset.blues, 200, 260, s.blues * 2),
+    _BandRange(preset.magentas, 260, 340, 1),
+  ];
+  var any = false;
+  for (var h = 0; h < 360; h++) {
+    var hueShift = 0.0, satMul = 1.0, lumMul = 1.0;
+    for (final br in bands) {
+      if (br.band.isNeutral || br.scale == 0) continue;
+      final w = _hueWindow(h.toDouble(), br.lo, br.hi, 12) * br.scale;
+      if (w <= 0) continue;
+      hueShift += br.band.hueShift * w;
+      satMul *= 1 + (br.band.sat - 1) * w;
+      lumMul *= 1 + (br.band.lum - 1) * w;
+      any = true;
+    }
+    p.hueShiftLut[h] = hueShift;
+    p.satMulLut[h] = satMul;
+    p.lumMulLut[h] = lumMul;
+  }
+  p.hasHsl = any;
+  return p;
+}
+
+/// Film-like tone curve: exposure, shadow/highlight shaping, whites control,
+/// a soft S and a creamy shoulder that never clips.
 double _tone(double v, _Params p) {
   v *= math.pow(2.0, p.exposure).toDouble();
   if (v < 0) v = 0;
@@ -104,14 +181,17 @@ double _tone(double v, _Params p) {
   final hw = _smoothstep(0.45, 1.0, v);
   v += p.highlights * 0.22 * hw * (1.05 - v);
 
+  // Whites: scales the very top end (protects dress detail when negative).
+  v *= 1 + p.whites * 0.35 * _smoothstep(0.65, 1.0, v);
+
   // Shadows: weighted toward the bottom, zero at pure black.
   final sw = 1 - _smoothstep(0.0, 0.55, v);
   v += p.shadows * 0.55 * sw * v * (1 - v);
 
-  // Soft S-curve; base amount is gentle, slider scales around it.
+  // Soft S-curve around the midtones.
   final vc = v.clamp(0.0, 1.0);
   final sig = vc * vc * (3 - 2 * vc);
-  final mixAmt = (0.22 + 0.30 * p.contrast).clamp(-0.20, 0.70);
+  final mixAmt = (0.45 * p.contrast).clamp(-0.20, 0.70);
   v = vc + (sig - vc) * mixAmt;
 
   // Creamy shoulder roll-off — highlights compress instead of clipping.
@@ -127,7 +207,7 @@ class Pipeline {
 
   // ---------------------------------------------------------------------
   // Step 2 — flatten to a neutral LOG-like base + Step 3 scene detection +
-  // Step 5 skin mask. All image-dependent, settings-independent work.
+  // skin mask. All image-dependent, settings-independent work.
   // ---------------------------------------------------------------------
   static Future<SceneCache> buildCache(
     Uint8List original,
@@ -225,8 +305,8 @@ class Pipeline {
   }
 
   // ---------------------------------------------------------------------
-  // Steps 4–6 — wedding grade, skin protection and final polish.
-  // Re-run whenever a slider changes; reads only from the cache.
+  // Palette stage — executes the active preset (plus user sliders) on the
+  // flat base, then applies skin protection and the final polish.
   // ---------------------------------------------------------------------
   static Future<Uint8List> render(
     Uint8List original,
@@ -234,20 +314,25 @@ class Pipeline {
     int width,
     int height,
     GradeSettings s, {
+    GradePreset preset = GradePreset.defaultPreset,
     int grainSeed = 7,
     ProgressFn? onProgress,
   }) async {
     final n = width * height;
-    final p = _resolve(s, cache.scene);
+    final p = _resolve(preset, s, cache.scene);
     final out = Uint8List(n * 4);
     final flat = cache.flat;
 
-    // White balance folded into per-channel tone LUTs.
-    final wbR = 1 + 0.055 * p.warm;
-    final wbG = 1 + 0.010 * p.warm;
-    final wbB = 1 - 0.065 * p.warm;
-    // Warm lifted blacks: coffee-brown floor, deep but never crushed.
-    const blR = 0.030, blG = 0.024, blB = 0.016;
+    // White balance folded into per-channel tone LUTs. Positive tint pulls
+    // green down slightly (magenta), the classic Lightroom axis.
+    final wbR = 1 + 0.055 * p.temp + 0.006 * p.tint;
+    final wbG = 1 + 0.010 * p.temp - 0.028 * p.tint;
+    final wbB = 1 - 0.065 * p.temp + 0.008 * p.tint;
+
+    // Lifted matte black point, faintly warm so blacks never go blue.
+    final blR = p.blackLift * 1.15;
+    final blG = p.blackLift;
+    final blB = p.blackLift * 0.85;
 
     final lutR = Float32List(256);
     final lutG = Float32List(256);
@@ -266,10 +351,16 @@ class Pipeline {
     final skinWarmR = 1 + 0.09 * s.skinWarmth;
     final skinWarmG = 1 + 0.015 * s.skinWarmth;
     final skinWarmB = 1 - 0.07 * s.skinWarmth;
-    final greensAmt = p.greens;
-    final bluesAmt = p.blues;
     final satGlobal = p.satGlobal;
+    final vibrance = p.vibrance;
     final skinProtect = p.skinProtect;
+    final hasHsl = p.hasHsl;
+    final hueShiftLut = p.hueShiftLut;
+    final satMulLut = p.satMulLut;
+    final lumMulLut = p.lumMulLut;
+    final hasZoneTint = p.ghR != 0 || p.ghG != 0 || p.ghB != 0 ||
+        p.gmR != 0 || p.gmG != 0 || p.gmB != 0 ||
+        p.gsR != 0 || p.gsG != 0 || p.gsB != 0;
 
     for (var y = 0; y < height; y++) {
       final rowPx = y * width;
@@ -277,7 +368,7 @@ class Pipeline {
         final px = rowPx + x;
         final i = px * 4;
 
-        // Tone + white balance via LUT.
+        // Tone curve + white balance via LUT.
         var r = lutR[flat[i]];
         var g = lutG[flat[i + 1]];
         var b = lutB[flat[i + 2]];
@@ -287,15 +378,18 @@ class Pipeline {
 
         var t = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-        // Split toning — coffee-brown shadows, cream/champagne highlights.
-        final sw = (1 - t) * (1 - t);
-        final hw = _smoothstep(0.40, 1.0, t);
-        r += sw * 0.020 + hw * 0.024;
-        g += sw * 0.004 + hw * 0.012;
-        b += sw * -0.018 + hw * -0.020;
+        // 3-way color grading: golden highlights, neutral-warm midtones,
+        // faintly cool shadows.
+        if (hasZoneTint) {
+          final hw = _smoothstep(0.55, 1.0, t);
+          final sw = 1 - _smoothstep(0.0, 0.45, t);
+          final mw = (1 - hw - sw).clamp(0.0, 1.0);
+          r += hw * p.ghR + mw * p.gmR + sw * p.gsR;
+          g += hw * p.ghG + mw * p.gmG + sw * p.gsG;
+          b += hw * p.ghB + mw * p.gmB + sw * p.gsB;
+        }
 
-        // Targeted HSL: olive greens, muted teal-leaning blues, and a global
-        // saturation roll-off that kills the oversaturated look.
+        // HSL mixer + presence (vibrance / saturation), in HSV space.
         var mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
         var mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
         if (mx > 0.0001) {
@@ -313,23 +407,21 @@ class Pipeline {
             if (hue < 0) hue += 360;
             var val = mx;
 
-            if (hue >= 60 && hue <= 170 && greensAmt > 0) {
-              final w = _smoothstep(60, 85, hue) *
-                  (1 - _smoothstep(140, 170, hue));
-              sat *= 1 - 0.38 * greensAmt * w;
-              hue += (95 - hue) * 0.35 * greensAmt * w;
-              val *= 1 - 0.06 * greensAmt * w;
-            } else if (hue >= 180 && hue <= 260 && bluesAmt > 0) {
-              final w = _smoothstep(180, 200, hue) *
-                  (1 - _smoothstep(240, 260, hue));
-              sat *= 1 - 0.34 * bluesAmt * w;
-              hue += (202 - hue) * 0.30 * bluesAmt * w;
+            if (hasHsl) {
+              final hi = hue.round() % 360;
+              hue += hueShiftLut[hi];
+              if (hue < 0) hue += 360;
+              if (hue >= 360) hue -= 360;
+              sat *= satMulLut[hi];
+              val = (val * lumMulLut[hi]).clamp(0.0, 1.0);
             }
 
-            // Overall: slightly reduced, with an extra roll-off on already
-            // heavy saturation.
+            // Vibrance lifts muted colors; global saturation eases off the
+            // whole image; the roll-off tames anything still heavy.
             sat *= satGlobal;
-            sat *= 1 - 0.20 * sat * sat;
+            sat += vibrance * sat * (1 - sat);
+            sat *= 1 - 0.18 * sat * sat;
+            sat = sat.clamp(0.0, 1.0);
 
             // HSV → RGB.
             final c = val * sat;

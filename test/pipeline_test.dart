@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wedding_grader/models/preset.dart';
 import 'package:wedding_grader/models/settings.dart';
 import 'package:wedding_grader/processing/pipeline.dart';
 import 'package:wedding_grader/processing/scene.dart';
@@ -103,6 +104,34 @@ void main() {
       }
       // Bloom is additive before the strength blend, so allow ±1 rounding.
       expect(maxDelta, lessThanOrEqualTo(1));
+    });
+
+    test('preset None passes the flat base through; wedding preset warms it',
+        () async {
+      const w = 120, h = 90;
+      final original = _syntheticFrame(w, h);
+      final cache = await Pipeline.buildCache(original, w, h);
+      // Neutral sliders: full strength, no bloom, detail gain zeroed.
+      const neutral = GradeSettings(
+          strength: 1, bloom: 0, sharpness: 0.125, warmth: 0);
+
+      final none = await Pipeline.render(original, cache, w, h, neutral,
+          preset: GradePreset.none);
+      final wedding = await Pipeline.render(original, cache, w, h, neutral,
+          preset: GradePreset.classicTimelessWedding);
+
+      // "None" only differs from the flat base by the highlight shoulder.
+      var maxDelta = 0;
+      for (var i = 0; i < none.length; i++) {
+        final d = (none[i] - cache.flat[i]).abs();
+        if (d > maxDelta) maxDelta = d;
+      }
+      expect(maxDelta, lessThanOrEqualTo(12));
+
+      // The wedding palette is measurably warmer than the pass-through.
+      final sNone = ImageStats.analyze(none, w, h);
+      final sWedding = ImageStats.analyze(wedding, w, h);
+      expect(sWedding.warmth, greaterThan(sNone.warmth));
     });
 
     test('tone response is monotonic for a neutral ramp', () async {

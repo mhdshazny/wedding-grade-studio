@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/preset.dart';
 import '../state/app_state.dart';
 
 /// Right-hand (or bottom, on mobile) panel with the grading controls.
@@ -31,7 +32,7 @@ class ControlsPanel extends StatelessWidget {
         const SizedBox(height: 8),
         _StageButton(
           step: '2',
-          label: 'Apply Wedding Palette',
+          label: 'Apply Color Palette',
           icon: Icons.palette_outlined,
           active: state.stage == ViewStage.graded,
           enabled: state.selected != null,
@@ -52,6 +53,19 @@ class ControlsPanel extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 16),
+        const Divider(),
+        const SizedBox(height: 8),
+        Text('Color Presets', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 10),
+        for (final p in GradePreset.all) ...[
+          _PresetTile(
+            preset: p,
+            selected: state.preset.id == p.id,
+            onTap: () => state.setPreset(p),
+          ),
+          const SizedBox(height: 8),
+        ],
+        const SizedBox(height: 8),
         const Divider(),
         const SizedBox(height: 8),
         Row(
@@ -215,6 +229,68 @@ class ControlsPanel extends StatelessWidget {
   static String _signed(double v) {
     final n = (v * 100).round();
     return n > 0 ? '+$n' : '$n';
+  }
+}
+
+class _PresetTile extends StatelessWidget {
+  final GradePreset preset;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PresetTile({
+    required this.preset,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? scheme.primary : scheme.outlineVariant,
+            width: selected ? 1.5 : 1,
+          ),
+          color: selected
+              ? scheme.primary.withValues(alpha: 0.10)
+              : Colors.transparent,
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
+              size: 18,
+              color: selected ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(preset.name,
+                      style: Theme.of(context).textTheme.bodyMedium),
+                  const SizedBox(height: 2),
+                  Text(
+                    preset.description,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 
+import '../models/preset.dart';
 import '../models/settings.dart';
 import '../processing/pipeline.dart';
 import '../processing/scene.dart';
@@ -73,6 +74,7 @@ class AppState extends ChangeNotifier {
   final photos = <PhotoItem>[];
   PhotoItem? selected;
   GradeSettings settings = GradeSettings.defaults;
+  GradePreset preset = GradePreset.defaultPreset;
   ViewStage stage = ViewStage.original;
   int _settingsRevision = 0;
 
@@ -231,6 +233,7 @@ class AppState extends ChangeNotifier {
         item.previewW,
         item.previewH,
         settings,
+        preset: preset,
         onProgress: (p) {
           item.progress = 0.5 + p * 0.5;
           notifyListeners();
@@ -314,6 +317,19 @@ class AppState extends ChangeNotifier {
 
   void resetSettings() => updateSettings(GradeSettings.defaults);
 
+  void setPreset(GradePreset next) {
+    if (preset.id == next.id) return;
+    preset = next;
+    _settingsRevision++;
+    notifyListeners();
+    final item = selected;
+    if (item != null &&
+        stage == ViewStage.graded &&
+        item.status != PhotoStatus.grading) {
+      _renderPreview(item);
+    }
+  }
+
   void clearNotice() {
     notice = null;
     notifyListeners();
@@ -367,6 +383,7 @@ class AppState extends ChangeNotifier {
       raw.width,
       raw.height,
       settings,
+      preset: preset,
       onProgress: (p) => onProgress(0.5 + p * 0.4),
     );
     final encoded = await encodeImage(
